@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Html s expr</title>
+  <script type="importmap">
+    {
+      "imports": {
+        "@zzkit/html-s-expr": "./dist/main.mjs"
+      }
+    }
+  </script>
+  <style>
+    /* 黑夜模式 */
+    @media (prefers-color-scheme: dark) {
+      body {
+        background-color: #222;
+        color: #fff;
+      }
+
+      textarea {
+        background-color: #333;
+        color: #fff;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div id="app">
+    <fieldset>
+      <legend>input</legend>
+      <textarea name="" id="input"></textarea>
+      <button id="submit">submit</button>
+      <label>
+        <input type="checkbox" id="minify">
+        minify
+      </label>
+    </fieldset>
+    <fieldset>
+      <legend>output</legend>
+      <textarea name="" id="output"></textarea>
+    </fieldset>
+  </div>
+  <script type="module">
+    import { nodeToSExpr } from "@zzkit/html-s-expr";
+    // const sExpr = nodeToSExpr(document.body.parentElement);
+    // 点击按钮之后调用这个并填到输出里
+    const $input = document.getElementById("input");
+    const $output = document.getElementById("output");
+    const $submit = document.getElementById("submit");
+    const $minify = document.getElementById("minify");
+    $submit.addEventListener("click", () => {
+      // 把 html render 出来 使用 dom parser
+      const html = $input.value;
+      const parser = new DOMParser();
+      const document = parser.parseFromString(html, "text/html");
+      // 移除不可见元素
+      const remove_all = sel => document.querySelectorAll(sel).forEach(x => x.remove())
+      remove_all("script");
+      remove_all("style");
+      remove_all("template");
+      remove_all("meta");
+      remove_all("link");
+      remove_all("[hidden]");
+      // 移除 innerText 为空的元素
+      document.querySelectorAll("*").forEach(x => {
+        if (x.innerText && x.innerText?.trim() === "") {
+          x.remove();
+        }
+      });
+      const sExpr = nodeToSExpr(document.body.parentElement, $minify.checked ? 0 : 2);
+      console.log(document)
+      window.doc1 = document;
+      console.log([...document.querySelectorAll("astro-island")])
+      $output.value = sExpr;
+    });
+  </script>
+</body>
+
+</html>

@@ -14,7 +14,6 @@ const keep_tags = [
 ];
 const ignore_tags = ["script", "style", "meta", "template"];
 const is_useless_cls = (cls: string) => {
-  // 以数字结尾的
   if (cls.match(/\d$/)) {
     return true;
   }
@@ -63,14 +62,36 @@ const is_useless_cls = (cls: string) => {
     "empty",
     "read-only",
     "read-write",
-    "hover",
-    "focus",
-    "active",
-    "visited",
-    "disabled",
-    "checked",
     "motion",
     "not",
+    "max",
+    "min",
+    "rounded",
+    "border",
+    "bg-",
+    "mb-",
+    "mr-",
+    "px-",
+    "py-",
+    "text-",
+    "block",
+    "inline-block",
+    "absolute",
+    "relative",
+    "fixed",
+    "sticky",
+    "z",
+    "top",
+    "right",
+    "bottom",
+    "left",
+    "w",
+    "h",
+    "min-w",
+    "max-w",
+    "min-h",
+    "max-h",
+    "shadow",
   ];
   if (tailwind_prefix.some((x) => cls.startsWith(x))) {
     return true;
@@ -78,28 +99,60 @@ const is_useless_cls = (cls: string) => {
   if (cls.includes("[") || cls.includes("]") || cls.includes(":")) {
     return true;
   }
-
   return false;
 };
 
 type VNode = {
   type: string;
+  text?: string;
   props?: Record<string, string>;
   children?: VNode[];
-  text?: string;
 };
 
-export class HTMLConverter {
-  constructor(readonly root: Node) {}
+function getVNodeKey(vnode: VNode, depth = 3): string {
+  if (depth === 0) return "";
+  // 忽略文本
+  if (vnode.type === "#text") return "";
+  // 输出 vnode 结构
+  let body = "(" + vnode.type;
+  if (vnode.props?.class) {
+    body += `"${vnode.props?.class}"`;
+  }
+  if (vnode.children) {
+    body += vnode.children
+      .map((n) => getVNodeKey(n, depth - 1))
+      .join(" ")
+      .trim();
+  }
+  body += ")";
+  return body;
+}
 
-  /**
-   * Converts a DOM node to a virtual DOM node.
-   *
-   * @param {Node} node - The DOM node to convert.
-   * @param {(node: Node) => boolean} [filter] - An optional filter function to determine if a node should be converted.
-   * @param {(vnode: VNode) => VNode | null} [process] - An optional process function to modify the converted virtual DOM node.
-   * @return {VNode | null} The converted virtual DOM node, or null if the node is filtered out.
-   */
+class ComponentDetector {
+  constructor(private depthThreshold: number) {}
+
+  areSimilar(a: VNode, b: VNode, depth = 0): boolean {
+    if (!b || !a) return false;
+    if (depth >= this.depthThreshold) return true;
+    if (a.type !== b.type || a.type === "#text" || b.type === "#text")
+      return false;
+    if (
+      (a.children?.filter((child) => child.type !== "#text").length || 0) !==
+      (b.children?.filter((child) => child.type !== "#text").length || 0)
+    ) {
+      return false;
+    }
+    return (a.children || []).every(
+      (child, index) =>
+        child.type === "#text" ||
+        this.areSimilar(child, (b.children || [])[index], depth + 1)
+    );
+  }
+}
+
+export class HTMLConverter {
+  constructor(readonly root: Node, private depthThreshold = 2) {}
+
   convertToVNode(
     node: Node,
     filter?: (node: Node) => boolean,
@@ -110,150 +163,103 @@ export class HTMLConverter {
       return null;
     }
     if (node instanceof Text) {
-      return process({
-        type: "#text",
-        text: node.textContent?.trim() || "",
-      });
+      return { type: "#text", text: node.nodeValue || "" };
     }
     if (node instanceof HTMLElement) {
+      if (ignore_tags.includes(node.tagName.toLowerCase())) {
+        return null;
+      }
       const props = Array.from(node.attributes).reduce(
         (acc, { name, value }) => {
+          if (name === "class" && is_useless_cls(value)) {
+            return acc;
+          }
           acc[name] = value;
           return acc;
         },
         {} as Record<string, string>
       );
-      if ("value" in node && node.value) {
-        props.value = node.value as string;
-      }
-      if ("src" in node && node.src) {
-        props.src = node.src as string;
-      }
-      if ("href" in node && node.href) {
-        props.href = node.href as string;
-      }
       const children = Array.from(node.childNodes)
         .map((child) => this.convertToVNode(child, filter, process))
         .filter(Boolean) as VNode[];
+      if (
+        !keep_tags.includes(node.tagName.toLowerCase()) &&
+        children.length === 0
+      ) {
+        return null;
+      }
       return process({
         type: node.tagName.toLowerCase(),
         props,
         children,
       });
     }
-    console.log({ node }, 1);
     return null;
   }
 
-  convertToSExpr(node: Node, space = 2): string {
-    const rootVNode = this.convertToVNode(
-      node,
-      (node) => {
-        if (node instanceof HTMLElement) {
-          const tagName = node.tagName.toLowerCase();
-          if (ignore_tags.includes(tagName)) {
-            return false;
-          }
-          const is_hidden_keep_node = hidden_keep_tags.includes(tagName);
-          // is hidden node
-          if (node.hidden && !is_hidden_keep_node) {
-            return false;
-          }
-          // is display none
-          if (
-            !is_hidden_keep_node &&
-            node instanceof Element &&
-            window.getComputedStyle(node).display === "none"
-          ) {
-            return false;
-          }
-        }
-        if (node instanceof Text && node.textContent?.trim() === "") {
-          return false;
-        }
-        return true;
-      },
-      (vnode) => {
-        const is_keep_node = keep_tags.includes(vnode.type);
-        const no_payload =
-          !vnode.props?.value && !vnode.props?.src && !vnode.props?.href;
-        if (no_payload) {
-          if (
-            !is_keep_node &&
-            vnode.children?.length === 1 &&
-            vnode.children[0].type !== "#text"
-          ) {
-            return vnode.children[0];
-          }
-          if (vnode.children?.length === 0) {
-            return null;
-          }
-        }
-        return vnode;
-      }
-    );
+  convertToSExpr(node: Node, space = 2, compressThreshold = 2): string {
+    const rootVNode = this.convertToVNode(node);
     if (!rootVNode) {
       return "";
     }
 
-    const convert = (vnode: VNode, depth = 0): string => {
-      if ("text" in vnode) {
-        if (vnode.text?.trim() === "") {
+    const detector = new ComponentDetector(this.depthThreshold);
+
+    const convert = (
+      vnode: VNode,
+      siblings: VNode[],
+      depth = 0,
+      // 保存 components 的key用于压缩显示
+      components: string[] = []
+    ): string => {
+      if (vnode.type === "#text") {
+        if (!vnode.text || vnode.text.trim() === "") {
           return "";
         }
-        // TODO: text node should indent like dom
-        return JSON.stringify(vnode.text);
+        return `${" ".repeat(depth * space)}${JSON.stringify(vnode.text)}`;
       }
-
-      // when base64 image, remove src
-      if (vnode.props?.src?.startsWith('src="data:image')) {
-        vnode.props.src = "";
-      }
-
-      const no_payload =
-        !vnode.props?.value && !vnode.props?.src && !vnode.props?.href;
-      const id = vnode.props?.id ? `#${vnode.props.id}` : "";
-
-      if (no_payload && !id) {
-        if (
-          !vnode.props?.value &&
-          vnode.children?.length === 1 &&
-          vnode.children[0].type !== "#text"
-        ) {
-          return convert(vnode.children[0], depth);
-        }
-        if (vnode.children?.length === 0) {
+      const similarNodes = siblings.filter((s) =>
+        detector.areSimilar(vnode, s)
+      );
+      const key = getVNodeKey(vnode);
+      if (similarNodes.length > compressThreshold) {
+        const hit_count = components.reduce(
+          (acc, k) => acc + (k === key ? 1 : 0),
+          0
+        );
+        if (hit_count < compressThreshold) {
+          // 添加到列表
+          components.push(key);
+        } else if (hit_count === compressThreshold) {
+          // 压缩一次
+          console.log(
+            `Compress ${vnode.type} count=${similarNodes.length} key=${key}`
+          );
+          components.push(key);
+          return `${" ".repeat(depth * space)}(COMPRESSED ${vnode.type} count=${
+            similarNodes.length
+          })`;
+        } else {
+          // 其余情况不用打印
           return "";
         }
       }
-
-      const className =
-        vnode.props?.class
-          ?.split(" ")
-          .filter((x) => !is_useless_cls(x))
-          .map((x) => `.${x}`)
-          .join("") || "";
-      const selector = `${vnode.type}${className}${id}`;
+      const childrenComponents: string[] = [];
       const children = (
-        vnode.children?.map((child) => convert(child, depth + 1)) || []
+        vnode.children?.map((child) =>
+          convert(child, vnode.children!, depth + 1, childrenComponents)
+        ) || []
       ).filter(Boolean);
-      const no_children = children.length === 0;
-      const only_text_children = children.every((x) => x.startsWith('"'));
-
-      // format s-expression
-      // TODO more format option
       const indent = " ".repeat(depth * space);
-      let sExpr = `${indent}(${selector} `;
+      let sExpr = `${indent}(${vnode.type} `;
       for (const [k, v] of Object.entries(vnode.props || {})) {
         if (k === "class" || k === "id") {
           continue;
         }
         sExpr += `${k}=${JSON.stringify(v)} `;
       }
-      if (no_children) {
+      if (children.length === 0) {
         sExpr += ")";
-      } else if (only_text_children) {
-        sExpr += `${children.join(" ")})`;
       } else {
         const enter_indent = space === 0 ? "" : `\n${indent}`;
         sExpr += enter_indent;
@@ -262,35 +268,28 @@ export class HTMLConverter {
       }
       return sExpr;
     };
-    return convert(rootVNode);
+    return convert(rootVNode, [rootVNode], 0);
   }
 }
 
 /**
- * Converts a DOM node to an S-expression.
+ * Converts a given node to an S-expression.
  *
- * @param {Node} node - The DOM node to convert.
- * @param {number} [space=2] - The number of spaces to use for indentation.
- * @return {string} The S-expression representation of the DOM node.
- *
- * @example
- * ```ts
- * import { JSDOM } from "jsdom";
- * import { nodeToSExpr } from "node-to-sexpr";
- *
- * const dom = new JSDOM(`
- *    <head>
- *       <title>Test Page</title>
- *   </head>
- *  <div id="foo" class="bar baz">
- *     <img src="https://example.com/image.png" />
- *    <a href="https://example.com">example.com</a>
- * </div>
- * `);
- * const sExpr = nodeToSExpr(document.body.parentElement!, 2);
- * console.log(sExpr);
- * ```
+ * @param node - The node to convert.
+ * @param space - The number of spaces to use for indentation. Defaults to 2.
+ * @param compressThreshold - The threshold to compress similar nodes. Defaults to 2.
+ * @param depthThreshold - The threshold to detect similar nodes. Defaults to 2.
+ * @return The S-expression representation of the node.
  */
-export function nodeToSExpr(node: Node, space = 2) {
-  return new HTMLConverter(node).convertToSExpr(node, space);
+export function nodeToSExpr(
+  node: Node,
+  space = 2,
+  compressThreshold = 2,
+  depthThreshold = 2
+) {
+  return new HTMLConverter(node, depthThreshold).convertToSExpr(
+    node,
+    space,
+    compressThreshold
+  );
 }
